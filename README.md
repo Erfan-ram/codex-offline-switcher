@@ -20,13 +20,15 @@ On macOS and Linux, run:
 python3 codex_accounts.py
 ```
 
-The menu adds the active account to a named profile, imports a package, exports the active account, switches profiles, checks quotas and signs out locally. Save your work before switching or signing out. The tool closes recognized Codex and VS Code processes before replacing or removing the local credential. If processes remain open, close them manually and retry.
+Choose **Save this computer's active account** to copy the current Codex login into a named profile. Choose **Import a profile from an export folder** when you already have a portable package. The menu also switches profiles, exports the active account, checks quotas and signs out locally.
+
+Save your work before switching or signing out. The tool closes recognized Codex and VS Code processes before replacing or removing the local credential. If processes remain open, close them manually and retry.
 
 ## Transfer a profile
 
 **Use each Codex account on only one computer at a time with this tool.** Close Codex on the source computer before using the transferred profile on the destination. The tool copies the sign-in credentials, and concurrent use can cause token refresh conflicts.
 
-Use **Export active account** on the source machine, copy the resulting folder privately to the destination, and use **Import package** there. Each export contains `auth.json`, `SHA256.txt` and `manifest.txt`. Treat the export folder like a password and keep it out of Git.
+Use **Export this computer's active account** on the source machine, copy the resulting folder privately to the destination, and use **Import a profile from an export folder** there. Each export contains `auth.json`, `SHA256.txt` and `manifest.txt`. Treat the export folder like a password and keep it out of Git.
 
 Profile management is local. **Check quota and reset credits** makes an authenticated read to ChatGPT and reports the five-hour and weekly limits, the reset countdown, and any available reset credits. It uses the existing access token.
 

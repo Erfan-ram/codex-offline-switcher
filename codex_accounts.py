@@ -3,6 +3,7 @@
 import argparse
 import csv
 from datetime import datetime, timezone
+from functools import lru_cache
 import hashlib
 import json
 import os
@@ -316,6 +317,24 @@ def fetch_usage(endpoint, tokens):
         return json.load(response)
 
 
+@lru_cache(maxsize=1)
+def windows_terminal_colors():
+    """Enable ANSI rendering in the classic Windows console as well."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetStdHandle.argtypes = (wintypes.DWORD,)
+    kernel.GetStdHandle.restype = wintypes.HANDLE
+    kernel.GetConsoleMode.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel.SetConsoleMode.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    handle = kernel.GetStdHandle(wintypes.DWORD(-11))
+    mode = wintypes.DWORD()
+    if kernel.GetConsoleMode(handle, ctypes.byref(mode)):
+        return bool(kernel.SetConsoleMode(handle, mode.value | 0x0004))
+    return bool(os.environ.get("WT_SESSION"))
+
+
 def style(text, code):
     encoding = sys.stdout.encoding or "utf-8"
     try:
@@ -323,7 +342,7 @@ def style(text, code):
     except UnicodeEncodeError:
         text = text.translate(str.maketrans({"█": "#", "░": ".", "─": "-", "›": ">"}))
     if (sys.stdout.isatty() and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb"
-            and (os.name != "nt" or os.environ.get("WT_SESSION"))):
+            and (os.name != "nt" or windows_terminal_colors())):
         return f"\033[{code}m{text}\033[0m"
     return text
 
@@ -403,10 +422,18 @@ def terminal_menu():
         print(style("─" * 48, 90))
         print(f"  Active account   {style(active, '1;97')}")
         print("  Saved profiles   " + (", ".join(sorted(profile_ids())) or "(none)"))
-        print("\n" + style("Profiles", "1;97"))
-        print("  1  Switch account\n  2  Add active profile\n  3  Import package\n  4  Export active account")
-        print("\n" + style("Account", "1;97"))
-        print("  5  Check quota and reset credits\n  6  Sign out locally\n  0  Exit")
+        print("\n" + style("Switch and save profiles", "1;97"))
+        print(f"  {style('1', 96)}  Switch to a saved profile")
+        print(f"  {style('2', 96)}  Save this computer's active account")
+        print(f"     {style('Copy the current Codex login into a named profile.', 90)}")
+        print("\n" + style("Transfer between computers", "1;97"))
+        print(f"  {style('3', 96)}  Import a profile from an export folder")
+        print(f"     {style('Choose the folder containing auth.json and SHA256.txt.', 90)}")
+        print(f"  {style('4', 96)}  Export this computer's active account")
+        print("\n" + style("Status and sign-out", "1;97"))
+        print(f"  {style('5', 96)}  Check quota and reset credits")
+        print(f"  {style('6', 96)}  Sign out on this computer")
+        print(f"  {style('0', 96)}  Exit menu")
         choice = input(style("\nSelect an option › ", 0)).strip()
         try:
             if choice == "0":
