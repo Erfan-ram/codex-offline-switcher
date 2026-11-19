@@ -26,6 +26,8 @@ Save your work before switching or signing out. The tool closes recognized Codex
 
 ## Transfer a profile
 
+The import and export menu options open a folder picker on Windows, macOS and Linux when Python has Tk and a graphical desktop is available. Import selects the existing package folder. Export selects its destination and creates a new package folder inside it. On headless systems or Python installations without Tk, enter the folder path at the terminal prompt.
+
 **Use each Codex account on only one computer at a time with this tool.** Close Codex on the source computer before using the transferred profile on the destination. The tool copies the sign-in credentials, and concurrent use can cause token refresh conflicts.
 
 Use **Export this computer's active account** on the source machine, copy the resulting folder privately to the destination, and use **Import a profile from an export folder** there. Each export contains `auth.json`, `SHA256.txt` and `manifest.txt`. Treat the export folder like a password and keep it out of Git.

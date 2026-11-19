@@ -112,9 +112,9 @@ def publish(parent, name, write):
     return destination
 
 
-def export_active():
+def export_active(destination=None):
     location, data = read_active()
-    parent = (store_path() / "exports").resolve()
+    parent = (destination if destination is not None else store_path() / "exports").resolve()
     if parent.is_relative_to(location):
         raise ValueError("The export destination must be outside CODEX_HOME.")
     now = datetime.now(timezone.utc)
@@ -411,6 +411,39 @@ def ask_profile(data):
         print(f"Saved profile: {save_profile(name, data)}")
 
 
+def choose_folder(title):
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError:
+        tk = None
+
+    if tk is not None:
+        root = None
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            folder = filedialog.askdirectory(
+                parent=root, title=title, initialdir=str(Path.home()), mustexist=True
+            )
+            return Path(folder) if folder else None
+        except tk.TclError:
+            pass
+        finally:
+            if root is not None:
+                root.destroy()
+
+    folder = input(f"{title} (paste folder path, or Enter to cancel): ").strip()
+    if not folder:
+        return None
+    if len(folder) >= 2 and folder[0] in "'\"" and folder[-1] == folder[0]:
+        folder = folder[1:-1]
+    path = Path(folder).expanduser()
+    if not path.is_dir():
+        raise ValueError("Choose an existing folder.")
+    return path
+
+
 def terminal_menu():
     while True:
         try:
@@ -445,11 +478,13 @@ def terminal_menu():
             elif choice == "2":
                 ask_profile(read_active()[1])
             elif choice == "3":
-                folder = input("Export folder path (empty to cancel): ").strip().strip('"')
-                if folder:
-                    ask_profile(read_package(Path(folder).expanduser()))
+                folder = choose_folder("Select the package folder to import")
+                if folder is not None:
+                    ask_profile(read_package(folder))
             elif choice == "4":
-                print(f"Export created: {export_active()}")
+                folder = choose_folder("Select where to create the export folder")
+                if folder is not None:
+                    print(f"Export created: {export_active(folder)}")
             elif choice == "5":
                 show_quotas()
             elif choice == "6":
