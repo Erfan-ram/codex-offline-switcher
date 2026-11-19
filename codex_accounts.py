@@ -316,6 +316,18 @@ def fetch_usage(endpoint, tokens):
         return json.load(response)
 
 
+def style(text, code):
+    encoding = sys.stdout.encoding or "utf-8"
+    try:
+        text.encode(encoding)
+    except UnicodeEncodeError:
+        text = text.translate(str.maketrans({"█": "#", "░": ".", "─": "-", "›": ">"}))
+    if (sys.stdout.isatty() and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb"
+            and (os.name != "nt" or os.environ.get("WT_SESSION"))):
+        return f"\033[{code}m{text}\033[0m"
+    return text
+
+
 def show_window(label, window):
     if not window or not isinstance(window.get("used_percent"), (float, int)):
         print(f"  {label:7}  Unavailable")
@@ -324,10 +336,8 @@ def show_window(label, window):
     filled = round(remaining / 5)
     if 0 < remaining < 100:
         filled = min(19, max(1, filled))
-    bar = "#" * filled + "." * (20 - filled)
-    if sys.stdout.isatty() and (os.name != "nt" or os.environ.get("WT_SESSION")):
-        color = 31 if remaining <= 10 else 33 if remaining <= 30 else 32
-        bar = f"\033[{color}m{'#' * filled}\033[90m{'.' * (20 - filled)}\033[0m"
+    color = 91 if remaining <= 10 else 93 if remaining <= 30 else 92
+    bar = style("█" * filled, color) + style("░" * (20 - filled), 90)
     reset_text = "time unavailable"
     if isinstance(window.get("reset_at"), int) and 0 < window["reset_at"] < 253402300799:
         reset = datetime.fromtimestamp(window["reset_at"], timezone.utc)
@@ -336,16 +346,18 @@ def show_window(label, window):
         hours, mins = divmod(remainder, 60)
         countdown = f"{days}d {hours}h {mins}m" if label == "Weekly" else f"{days * 24 + hours}h {mins}m"
         reset_text = f"{reset.astimezone():%Y-%m-%d %H:%M %z} ({countdown + ' left' if minutes else 'due now'})"
-    print(f"  {label:7}  [{bar}]  {remaining:g}% left  |  Resets {reset_text}")
+    print(f"  {label:7}  {bar}  {remaining:6.3g}% left")
+    print(f"           {style('Resets ' + reset_text, 90)}")
 
 
 def show_quotas():
+    print("\n" + style("Account quota", "1;96"))
     try:
         _, active = read_active()
     except (ValueError, OSError):
         active = None
     for name, fingerprint in sorted(profile_ids().items()):
-        print(f"\n{name}")
+        print("\n" + style(name, "1;97"))
         try:
             data = active if active and identity(active) == fingerprint else read_saved(name)
             tokens = json.loads(data)["tokens"]
@@ -364,7 +376,8 @@ def show_quotas():
                     count = fetch_usage("rate-limit-reset-credits", tokens).get("available_count")
                 except (OSError, ValueError, AttributeError):
                     count = None
-            print(f"  Reset credits  {f'{count} available' if type(count) is int and count >= 0 else 'Availability unknown'}")
+            availability = f"{count} available" if type(count) is int and count >= 0 else "Availability unknown"
+            print(f"  Reset credits  {style(availability, 96 if type(count) is int and count > 0 else 90)}")
         except urllib.error.HTTPError as error:
             print("  Sign in again to check quota." if error.code == 401 else f"  Quota unavailable (HTTP {error.code}).")
         except (OSError, ValueError, AttributeError):
@@ -386,11 +399,15 @@ def terminal_menu():
             active = next((name for name, value in profile_ids().items() if value == identity(current)), "Unsaved account")
         except (ValueError, OSError) as error:
             active = str(error)
-        print(f"\nCodex Accounts\nActive: {active}")
-        print("Saved profiles: " + (", ".join(sorted(profile_ids())) or "(none)"))
-        print("1 - Switch account\n2 - Add active profile\n3 - Import package\n4 - Export active account"
-              "\n5 - Check quota and reset credits\n6 - Sign out locally\n0 - Exit")
-        choice = input("Choose: ").strip()
+        print("\n" + style("Codex Offline Switcher", "1;96"))
+        print(style("─" * 48, 90))
+        print(f"  Active account   {style(active, '1;97')}")
+        print("  Saved profiles   " + (", ".join(sorted(profile_ids())) or "(none)"))
+        print("\n" + style("Profiles", "1;97"))
+        print("  1  Switch account\n  2  Add active profile\n  3  Import package\n  4  Export active account")
+        print("\n" + style("Account", "1;97"))
+        print("  5  Check quota and reset credits\n  6  Sign out locally\n  0  Exit")
+        choice = input(style("\nSelect an option › ", 0)).strip()
         try:
             if choice == "0":
                 return
