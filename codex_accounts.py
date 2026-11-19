@@ -1,6 +1,7 @@
 """Codex profile manager and portable credential package utility."""
 
 import argparse
+import base64
 import csv
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -411,28 +412,77 @@ def ask_profile(data):
         print(f"Saved profile: {save_profile(name, data)}")
 
 
+def folder_picker_commands(title):
+    if sys.platform == "win32":
+        # Keep the title separate from the script and run the native picker in an STA.
+        bundled = Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe"
+        runtimes = (shutil.which("pwsh.exe") or (str(bundled) if bundled.is_file() else None),
+                    shutil.which("powershell.exe"))
+        script = """
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Application]::EnableVisualStyles()
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$dialog = [System.Windows.Forms.FolderBrowserDialog]::new()
+try {
+    $dialog.Description = [Console]::In.ReadLine()
+    if ($dialog.PSObject.Properties['UseDescriptionForTitle']) {
+        $dialog.UseDescriptionForTitle = $true
+    }
+    $dialog.SelectedPath = [Environment]::GetFolderPath('UserProfile')
+    if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        [Console]::Write($dialog.SelectedPath)
+    }
+} finally {
+    $dialog.Dispose()
+}
+"""
+        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+        for powershell in filter(None, runtimes):
+            yield [powershell, "-NoProfile", "-STA", "-EncodedCommand", encoded], (title + "\n").encode(), False
+    elif sys.platform == "darwin":
+        script = """
+on run argv
+    try
+        return POSIX path of (choose folder with prompt (item 1 of argv))
+    on error number -128
+        return ""
+    end try
+end run
+"""
+        yield ["/usr/bin/osascript", "-e", script, title], b"", False
+    elif sys.platform.startswith("linux") and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+        tools = ("kdialog", "zenity") if "kde" in desktop else ("zenity", "kdialog")
+        for tool in tools:
+            path = shutil.which(tool)
+            if path is not None:
+                args = ([path, "--title", title, "--getexistingdirectory", str(Path.home())] if tool == "kdialog"
+                        else [path, "--file-selection", "--directory", f"--title={title}",
+                              f"--filename={Path.home()}/"])
+                yield args, b"", True
+
+
 def choose_folder(title):
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except ImportError:
-        tk = None
-
-    if tk is not None:
-        root = None
+    for command, input_data, cancel_is_one in folder_picker_commands(title):
         try:
-            root = tk.Tk()
-            root.withdraw()
-            folder = filedialog.askdirectory(
-                parent=root, title=title, initialdir=str(Path.home()), mustexist=True
-            )
-            return Path(folder) if folder else None
-        except tk.TclError:
-            pass
-        finally:
-            if root is not None:
-                root.destroy()
-
+            result = subprocess.run(command, input=input_data, capture_output=True)
+        except OSError:
+            continue
+        if result.returncode == 0:
+            folder = os.fsdecode(result.stdout) if sys.platform.startswith("linux") else result.stdout.decode("utf-8")
+            folder = folder.removesuffix("\r\n") if folder.endswith("\r\n") else folder.removesuffix("\n")
+            if not folder:
+                return None
+            path = Path(folder)
+            if path.is_dir():
+                return path
+            raise ValueError("The selected location is not an accessible folder.")
+        if cancel_is_one and result.returncode == 1 and not re.search(
+            rb"(cannot open display|failed to open display|could not connect to display|could not load the Qt platform plugin)",
+            result.stderr, re.IGNORECASE
+        ):
+            return None
     folder = input(f"{title} (paste folder path, or Enter to cancel): ").strip()
     if not folder:
         return None

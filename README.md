@@ -26,7 +26,7 @@ Save your work before switching or signing out. The tool closes recognized Codex
 
 ## Transfer a profile
 
-The import and export menu options open a folder picker on Windows, macOS and Linux when Python has Tk and a graphical desktop is available. Import selects the existing package folder. Export selects its destination and creates a new package folder inside it. On headless systems or Python installations without Tk, enter the folder path at the terminal prompt.
+The import and export menu options use the Windows folder dialog through PowerShell, the macOS folder dialog through `osascript`, or `kdialog`/`zenity` on a Linux desktop. Import selects an existing package folder. Export creates a new package folder under the selected destination. If a desktop picker is unavailable, enter the path at the terminal prompt.
 
 **Use each Codex account on only one computer at a time with this tool.** Close Codex on the source computer before using the transferred profile on the destination. The tool copies the sign-in credentials, and concurrent use can cause token refresh conflicts.
 
