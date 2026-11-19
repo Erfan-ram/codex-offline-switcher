@@ -1,0 +1,14 @@
+auth.json
+SHA256.txt
+manifest.txt
+identity.sha256
+profiles/
+backups/
+exports/
+codex-auth-export-*/
+codex-auth-from-*/
+.pending-*/
+.account-switch-*/
+__pycache__/
+*.py[cod]
+.venv/
