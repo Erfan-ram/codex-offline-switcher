@@ -232,7 +232,10 @@ def close_clients():
         bundled = Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe"
         runtime = shutil.which("pwsh") or (bundled if bundled.is_file() else shutil.which("powershell.exe"))
         if helper.is_file() and runtime:
-            subprocess.run([str(runtime), "-NoProfile", "-File", str(helper)], check=True)
+            result = subprocess.run([str(runtime), "-NoProfile", "-File", str(helper)], capture_output=True)
+            if result.returncode:
+                assert_clients_closed()
+                raise ValueError("The Windows client shutdown check failed. Close the clients and retry.")
         else:
             # Portable installations can close clients manually before retrying.
             raise ValueError("Close Codex, ChatGPT Desktop and VS Code, then retry.")
@@ -259,7 +262,7 @@ def assert_clients_closed():
         raise ValueError(f"Close remaining clients and retry: {names}.")
 
 
-def change_account(name):
+def change_account(name, notify):
     target = read_saved(name) if name is not None else None
     location = codex_home()
     path = location / "auth.json"
@@ -267,10 +270,10 @@ def change_account(name):
     if path.is_symlink():
         raise ValueError("The active auth.json is a filesystem link.")
     if name is None and not path.exists():
-        print("Already signed out.")
-        return
+        return "Already signed out."
     if input("Save your work. Codex clients and VS Code may close. Continue [y/N]? ").strip().lower() != "y":
-        return
+        return "Cancelled."
+    notify("Closing Codex clients and checking for running processes...")
     close_clients()
     assert_file_storage(location)
     if path.is_symlink():
@@ -279,15 +282,15 @@ def change_account(name):
     if before is not None:
         fingerprint = identity(before)
         backup = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
+        notify("Saving a backup of the current account...")
         saved = publish(store_path() / "backups", backup, lambda stage: write_files(stage, before))
-        print(f"Backup: {saved}")
         current = next((label for label, value in profile_ids().items() if value == fingerprint), None)
         if current:
             save_profile(current, before)
             if name == current:
-                print(f"{current} is already active.")
-                return
+                return f"{current} is already active."
     # Use a private staging directory on the destination volume for atomic replacement.
+    notify("Updating the local sign-in file...")
     with tempfile.TemporaryDirectory(prefix=".account-switch-", dir=location) as temporary:
         staged = Path(temporary) / "auth.json"
         if target is not None:
@@ -299,7 +302,8 @@ def change_account(name):
             path.unlink(missing_ok=True)
         else:
             staged.replace(path)
-    print(f"Active account: {name}. Reopen Codex." if name else "Signed out locally. Saved profiles are available.")
+    message = f"Active account: {name}. Reopen Codex." if name else "Signed out locally. Saved profiles are available."
+    return f"{message}\nBackup: {saved}" if before is not None else message
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -336,22 +340,25 @@ def windows_terminal_colors():
     return bool(os.environ.get("WT_SESSION"))
 
 
+def can_redraw():
+    return (sys.stdout.isatty() and os.environ.get("TERM") != "dumb"
+            and (os.name != "nt" or windows_terminal_colors()))
+
+
 def style(text, code):
     encoding = sys.stdout.encoding or "utf-8"
     try:
         text.encode(encoding)
     except UnicodeEncodeError:
         text = text.translate(str.maketrans({"█": "#", "░": ".", "─": "-", "›": ">"}))
-    if (sys.stdout.isatty() and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb"
-            and (os.name != "nt" or windows_terminal_colors())):
+    if "NO_COLOR" not in os.environ and can_redraw():
         return f"\033[{code}m{text}\033[0m"
     return text
 
 
-def show_window(label, window):
+def quota_window_lines(label, window):
     if not window or not isinstance(window.get("used_percent"), (float, int)):
-        print(f"  {label:7}  Unavailable")
-        return
+        return [f"  {label:7}  Unavailable"]
     remaining = min(100, max(0, 100 - window["used_percent"]))
     filled = round(remaining / 5)
     if 0 < remaining < 100:
@@ -366,42 +373,75 @@ def show_window(label, window):
         hours, mins = divmod(remainder, 60)
         countdown = f"{days}d {hours}h {mins}m" if label == "Weekly" else f"{days * 24 + hours}h {mins}m"
         reset_text = f"{reset.astimezone():%Y-%m-%d %H:%M %z} ({countdown + ' left' if minutes else 'due now'})"
-    print(f"  {label:7}  {bar}  {remaining:6.3g}% left")
-    print(f"           {style('Resets ' + reset_text, 90)}")
+    return [f"  {label:7}  {bar}  {remaining:6.3g}% left",
+            f"           {style('Resets ' + reset_text, 90)}"]
 
 
-def show_quotas():
-    print("\n" + style("Account quota", "1;96"))
+def quota_profiles():
     try:
         _, active = read_active()
     except (ValueError, OSError):
         active = None
     for name, fingerprint in sorted(profile_ids().items()):
-        print("\n" + style(name, "1;97"))
-        try:
-            data = active if active and identity(active) == fingerprint else read_saved(name)
-            tokens = json.loads(data)["tokens"]
-            usage = fetch_usage("usage", tokens)
-            if usage.get("account_id") not in (None, tokens["account_id"]):
-                print("  Service returned a different account.")
-                continue
-            limits = usage.get("rate_limit") or {}
-            windows = {row.get("limit_window_seconds"): row for row in
-                       (limits.get("primary_window"), limits.get("secondary_window")) if isinstance(row, dict)}
-            show_window("5-hour", windows.get(18000))
-            show_window("Weekly", windows.get(604800))
-            count = (usage.get("rate_limit_reset_credits") or {}).get("available_count")
-            if type(count) is not int or count < 0:
-                try:
-                    count = fetch_usage("rate-limit-reset-credits", tokens).get("available_count")
-                except (OSError, ValueError, AttributeError):
-                    count = None
-            availability = f"{count} available" if type(count) is int and count >= 0 else "Availability unknown"
-            print(f"  Reset credits  {style(availability, 96 if type(count) is int and count > 0 else 90)}")
-        except urllib.error.HTTPError as error:
-            print("  Sign in again to check quota." if error.code == 401 else f"  Quota unavailable (HTTP {error.code}).")
-        except (OSError, ValueError, AttributeError):
-            print("  Could not read account quota.")
+        yield name, fingerprint, active
+
+
+def quota_lines(name, fingerprint, active):
+    lines = [style(name, "1;97")]
+    try:
+        data = active if active and identity(active) == fingerprint else read_saved(name)
+        tokens = json.loads(data)["tokens"]
+        usage = fetch_usage("usage", tokens)
+        if usage.get("account_id") not in (None, tokens["account_id"]):
+            return lines + ["  Service returned a different account."]
+        limits = usage.get("rate_limit") or {}
+        windows = {row.get("limit_window_seconds"): row for row in
+                   (limits.get("primary_window"), limits.get("secondary_window")) if isinstance(row, dict)}
+        lines.extend(quota_window_lines("5-hour", windows.get(18000)))
+        lines.extend(quota_window_lines("Weekly", windows.get(604800)))
+        count = (usage.get("rate_limit_reset_credits") or {}).get("available_count")
+        if type(count) is not int or count < 0:
+            try:
+                count = fetch_usage("rate-limit-reset-credits", tokens).get("available_count")
+            except (OSError, ValueError, AttributeError):
+                count = None
+        availability = f"{count} available" if type(count) is int and count >= 0 else "Availability unknown"
+        lines.append(f"  Reset credits  {style(availability, 96 if type(count) is int and count > 0 else 90)}")
+    except urllib.error.HTTPError as error:
+        lines.append("  Sign in again to check quota." if error.code == 401 else f"  Quota unavailable (HTTP {error.code}).")
+    except (OSError, ValueError, AttributeError):
+        lines.append("  Could not read account quota.")
+    return lines
+
+
+def show_quotas(redraw):
+    title = style("Account quota", "1;96")
+    profiles = list(quota_profiles())
+    if not redraw:
+        print("\n" + title)
+        for profile in profiles:
+            print("\n" + "\n".join(quota_lines(*profile)))
+        return "Quota check complete." if profiles else "No saved profiles to check."
+    if not profiles:
+        return "No saved profiles to check."
+    per_page = max(1, (shutil.get_terminal_size().lines - 6) // 8)
+    pages = []
+    for index, profile in enumerate(profiles):
+        if index % per_page == 0:
+            pages.append([])
+        draw_screen([title, "", *pages[-1], f"Checking {profile[0]} ({index + 1}/{len(profiles)})..."], True)
+        pages[-1].extend([*quota_lines(*profile), ""])
+    page = 0
+    while True:
+        draw_screen([title, "", *pages[page], f"Page {page + 1}/{len(pages)}"], True)
+        prompt = "Enter to return" if len(pages) == 1 else "N next · P previous · Enter to return"
+        choice = input(style(f"{prompt} > ", 0)).strip().lower()
+        if not choice or choice == "0":
+            return "Quota check complete."
+        if choice == "n":
+            page = (page + 1) % len(pages)
+        elif choice == "p":
+            page = (page - 1) % len(pages)
 
 
 def ask_profile(data):
@@ -409,7 +449,8 @@ def ask_profile(data):
     prompt = f"Profile name [{existing}]: " if existing else "Profile name (empty to cancel): "
     name = input(prompt).strip() or existing
     if name:
-        print(f"Saved profile: {save_profile(name, data)}")
+        return f"Saved profile: {save_profile(name, data)}"
+    return "Cancelled."
 
 
 def folder_picker_commands(title):
@@ -494,55 +535,95 @@ def choose_folder(title):
     return path
 
 
+def draw_screen(lines, redraw):
+    prefix = "\033[2J\033[H" if redraw else "\n"
+    print(prefix + "\n".join(lines), flush=True)
+
+
+def menu_lines():
+    profiles = profile_ids()
+    try:
+        _, current = read_active()
+        fingerprint = identity(current)
+        active = next((name for name, value in profiles.items() if value == fingerprint), "Unsaved account")
+    except (ValueError, OSError) as error:
+        active = str(error)
+    lines = [
+        style("Codex Offline Switcher", "1;96"),
+        style("─" * 48, 90),
+        f"  Active account   {style(active, '1;97')}",
+        "  Saved profiles   " + (", ".join(sorted(profiles)) or "(none)"),
+        "",
+        style("Switch and save profiles", "1;97"),
+        f"  {style('1', 96)}  Switch to a saved profile",
+        f"  {style('2', 96)}  Save this computer's active account",
+        "",
+        style("Transfer between computers", "1;97"),
+        f"  {style('3', 96)}  Import a profile from an export folder",
+        f"  {style('4', 96)}  Export this computer's active account",
+        "",
+        style("Status and sign-out", "1;97"),
+        f"  {style('5', 96)}  Check quota and reset credits",
+        f"  {style('6', 96)}  Sign out on this computer",
+        f"  {style('0', 96)}  Exit menu",
+        "",
+    ]
+    if shutil.get_terminal_size().lines >= 28:
+        lines.insert(11, style("     Choose the folder containing auth.json and SHA256.txt.", 90))
+        lines.insert(8, style("     Copy the current Codex login into a named profile.", 90))
+    return lines
+
+
 def terminal_menu():
-    while True:
-        try:
-            _, current = read_active()
-            active = next((name for name, value in profile_ids().items() if value == identity(current)), "Unsaved account")
-        except (ValueError, OSError) as error:
-            active = str(error)
-        print("\n" + style("Codex Offline Switcher", "1;96"))
-        print(style("─" * 48, 90))
-        print(f"  Active account   {style(active, '1;97')}")
-        print("  Saved profiles   " + (", ".join(sorted(profile_ids())) or "(none)"))
-        print("\n" + style("Switch and save profiles", "1;97"))
-        print(f"  {style('1', 96)}  Switch to a saved profile")
-        print(f"  {style('2', 96)}  Save this computer's active account")
-        print(f"     {style('Copy the current Codex login into a named profile.', 90)}")
-        print("\n" + style("Transfer between computers", "1;97"))
-        print(f"  {style('3', 96)}  Import a profile from an export folder")
-        print(f"     {style('Choose the folder containing auth.json and SHA256.txt.', 90)}")
-        print(f"  {style('4', 96)}  Export this computer's active account")
-        print("\n" + style("Status and sign-out", "1;97"))
-        print(f"  {style('5', 96)}  Check quota and reset credits")
-        print(f"  {style('6', 96)}  Sign out on this computer")
-        print(f"  {style('0', 96)}  Exit menu")
-        choice = input(style("\nSelect an option › ", 0)).strip()
-        try:
-            if choice == "0":
-                return
-            if choice == "1":
-                name = input("Profile name (empty to cancel): ").strip().lower()
-                if name:
-                    change_account(name)
-            elif choice == "2":
-                ask_profile(read_active()[1])
-            elif choice == "3":
-                folder = choose_folder("Select the package folder to import")
-                if folder is not None:
-                    ask_profile(read_package(folder))
-            elif choice == "4":
-                folder = choose_folder("Select where to create the export folder")
-                if folder is not None:
-                    print(f"Export created: {export_active(folder)}")
-            elif choice == "5":
-                show_quotas()
-            elif choice == "6":
-                change_account(None)
-            else:
-                print("Choose a displayed option.")
-        except (OSError, ValueError, subprocess.SubprocessError) as error:
-            print(f"Operation stopped: {error}")
+    redraw = can_redraw()
+    if redraw:
+        print("\033[?1049h", end="", flush=True)
+    status = ""
+
+    def notify(message):
+        if redraw:
+            draw_screen([*menu_lines(), style(message, 96)], True)
+        else:
+            print(message, flush=True)
+
+    try:
+        while True:
+            lines = menu_lines()
+            if status:
+                lines.append(status)
+            draw_screen(lines, redraw)
+            choice = input(style("Select an option › ", 0)).strip()
+            try:
+                if choice == "0":
+                    return
+                if choice == "1":
+                    name = input("Profile name (empty to cancel): ").strip().lower()
+                    status = change_account(name, notify) if name else "Cancelled."
+                elif choice == "2":
+                    status = ask_profile(read_active()[1])
+                elif choice == "3":
+                    notify("Choose the folder containing auth.json and SHA256.txt...")
+                    folder = choose_folder("Select the package folder to import")
+                    status = ask_profile(read_package(folder)) if folder is not None else "Import cancelled."
+                elif choice == "4":
+                    notify("Choose a destination folder for the export...")
+                    folder = choose_folder("Select where to create the export folder")
+                    if folder is None:
+                        status = "Export cancelled."
+                    else:
+                        notify("Verifying and writing the export...")
+                        status = f"Export created:\n{export_active(folder)}"
+                elif choice == "5":
+                    status = show_quotas(redraw)
+                elif choice == "6":
+                    status = change_account(None, notify)
+                else:
+                    status = style("Choose a displayed option.", 93)
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                status = style(f"Operation stopped: {error}", 91)
+    finally:
+        if redraw:
+            print("\033[?1049l", end="", flush=True)
 
 
 def main():

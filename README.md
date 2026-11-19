@@ -24,6 +24,8 @@ Choose **Save this computer's active account** to copy the current Codex login i
 
 Save your work before switching or signing out. The tool closes recognized Codex and VS Code processes before replacing or removing the local credential. If processes remain open, close them manually and retry.
 
+In an interactive terminal, the menu redraws in place and replaces the status message as an operation progresses. The quota screen loads accounts one at a time. Press Enter to return to the menu, or use N and P to browse when there is more than one page.
+
 ## Transfer a profile
 
 The import and export menu options use the Windows folder dialog through PowerShell, the macOS folder dialog through `osascript`, or `kdialog`/`zenity` on a Linux desktop. Import selects an existing package folder. Export creates a new package folder under the selected destination. If a desktop picker is unavailable, enter the path at the terminal prompt.
