@@ -414,27 +414,31 @@ def quota_lines(name, fingerprint, active):
     return lines
 
 
-def show_quotas(redraw):
+def show_quotas(redraw, inline, notify, inline_results):
     title = style("Account quota", "1;96")
     profiles = list(quota_profiles())
-    if not redraw:
-        print("\n" + title)
-        for profile in profiles:
-            print("\n" + "\n".join(quota_lines(*profile)))
-        return "Quota check complete." if profiles else "No saved profiles to check."
     if not profiles:
         return "No saved profiles to check."
+    if inline:
+        inline_results.clear()
+        for index, profile in enumerate(profiles, 1):
+            notify(f"Checking {profile[0]} ({index}/{len(profiles)})...")
+            inline_results[profile[0]] = quota_lines(*profile)[1:]
+        return "Quota check complete."
     per_page = max(1, (shutil.get_terminal_size().lines - 6) // 8)
     pages = []
-    for index, profile in enumerate(profiles):
-        if index % per_page == 0:
+    for index, profile in enumerate(profiles, 1):
+        if (index - 1) % per_page == 0:
             pages.append([])
-        draw_screen([title, "", *pages[-1], f"Checking {profile[0]} ({index + 1}/{len(profiles)})..."], True)
-        pages[-1].extend([*quota_lines(*profile), ""])
+        notify(f"Checking {profile[0]} ({index}/{len(profiles)})...")
+        heading, *details = quota_lines(*profile)
+        pages[-1].extend([f"  {index}  {heading}", *details, ""])
     page = 0
     while True:
-        draw_screen([title, "", *pages[page], f"Page {page + 1}/{len(pages)}"], True)
-        prompt = "Enter to return" if len(pages) == 1 else "N next · P previous · Enter to return"
+        draw_screen([title, "", *pages[page], f"Page {page + 1}/{len(pages)}"], redraw)
+        prompt = "Profile number to switch / Enter to return"
+        if len(pages) > 1:
+            prompt = "N next / P previous / " + prompt
         choice = input(style(f"{prompt} > ", 0)).strip().lower()
         if not choice or choice == "0":
             return "Quota check complete."
@@ -442,6 +446,10 @@ def show_quotas(redraw):
             page = (page + 1) % len(pages)
         elif choice == "p":
             page = (page - 1) % len(pages)
+        else:
+            name = profile_at(choice, [profile[0] for profile in profiles])
+            if name:
+                return change_account(name, notify)
 
 
 def ask_profile(data):
@@ -540,7 +548,74 @@ def draw_screen(lines, redraw):
     print(prefix + "\n".join(lines), flush=True)
 
 
-def menu_lines():
+def profile_at(choice, profiles):
+    if re.fullmatch(r"[0-9]{1,9}", choice):
+        number = int(choice)
+        if 1 <= number <= len(profiles):
+            return profiles[number - 1]
+    return None
+
+
+def select_profile(action, redraw):
+    profiles = sorted(profile_ids())
+    if not profiles:
+        raise ValueError("No saved profiles.")
+    lines = [style(f"{action} profile", "1;96"), ""]
+    lines.extend(f"  {number}  {name}" for number, name in enumerate(profiles, 1))
+    draw_screen(lines, redraw)
+    while True:
+        choice = input("Profile number (Enter to cancel) > ").strip()
+        if not choice or choice == "0":
+            return None
+        name = profile_at(choice, profiles)
+        if name:
+            return name
+        draw_screen([*lines, "", "Choose one of the listed numbers."], redraw)
+
+
+def remove_profile(name):
+    if input(f"Remove '{name}' from the saved profiles? [y/N] ").strip().lower() != "y":
+        return "Removal cancelled."
+    if name not in profile_ids():
+        raise ValueError("That profile is no longer saved.")
+    store = store_path()
+    archive = store / "removed-profiles"
+    archive.mkdir(mode=0o700, exist_ok=True)
+    source = store / "profiles" / name
+    source.rename(archive / f"{name}-{uuid.uuid4().hex[:12]}")
+    return f"Removed profile: {name}. Recoverable in {archive}"
+
+
+def quota_layout():
+    try:
+        settings = json.loads((store_path() / "settings.json").read_text(encoding="utf-8"))
+        return "separate" if settings.get("quota_layout") == "separate" else "inline"
+    except (OSError, ValueError, AttributeError):
+        return "inline"
+
+
+def change_quota_layout(current, redraw):
+    draw_screen([
+        style("Settings", "1;96"),
+        f"Quota display: {current}",
+        "",
+        "  1  Inline, below the main menu",
+        "  2  Separate quota screen",
+    ], redraw)
+    choice = input("Choose a layout (Enter to keep current) > ").strip()
+    if choice not in ("1", "2"):
+        return current, "Settings unchanged."
+    selected = "inline" if choice == "1" else "separate"
+    store = store_path()
+    store.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tempfile.TemporaryDirectory(prefix=".settings-", dir=store) as temporary:
+        path = Path(temporary) / "settings.json"
+        write_private(path, json.dumps({"quota_layout": selected}).encode())
+        path.replace(store / "settings.json")
+    return selected, f"Quota display set to {selected}."
+
+
+def menu_lines(inline_results):
     profiles = profile_ids()
     try:
         _, current = read_active()
@@ -548,6 +623,18 @@ def menu_lines():
         active = next((name for name, value in profiles.items() if value == fingerprint), "Unsaved account")
     except (ValueError, OSError) as error:
         active = str(error)
+    if inline_results:
+        lines = [
+            style("Codex Offline Switcher", "1;96"),
+            f"Active: {active}",
+            "1 Switch  2 Save active  3 Import  4 Export  5 Refresh quota",
+            "6 Sign out  7 Remove profile  8 Settings  0 Exit",
+            "",
+            style("Account quota   ·   Type S + profile number to switch", "1;96"),
+        ]
+        for number, (name, details) in enumerate(inline_results.items(), 1):
+            lines.extend([f"  {style(f'S{number}', 96)}  {style(name, '1;97')}", *details, ""])
+        return lines
     lines = [
         style("Codex Offline Switcher", "1;96"),
         style("─" * 48, 90),
@@ -557,6 +644,7 @@ def menu_lines():
         style("Switch and save profiles", "1;97"),
         f"  {style('1', 96)}  Switch to a saved profile",
         f"  {style('2', 96)}  Save this computer's active account",
+        f"  {style('7', 96)}  Remove a saved profile",
         "",
         style("Transfer between computers", "1;97"),
         f"  {style('3', 96)}  Import a profile from an export folder",
@@ -565,11 +653,12 @@ def menu_lines():
         style("Status and sign-out", "1;97"),
         f"  {style('5', 96)}  Check quota and reset credits",
         f"  {style('6', 96)}  Sign out on this computer",
+        f"  {style('8', 96)}  Settings",
         f"  {style('0', 96)}  Exit menu",
         "",
     ]
     if shutil.get_terminal_size().lines >= 28:
-        lines.insert(11, style("     Choose the folder containing auth.json and SHA256.txt.", 90))
+        lines.insert(12, style("     Choose the folder containing auth.json and SHA256.txt.", 90))
         lines.insert(8, style("     Copy the current Codex login into a named profile.", 90))
     return lines
 
@@ -579,25 +668,30 @@ def terminal_menu():
     if redraw:
         print("\033[?1049h", end="", flush=True)
     status = ""
+    layout = quota_layout()
+    inline_results = {}
 
     def notify(message):
         if redraw:
-            draw_screen([*menu_lines(), style(message, 96)], True)
+            draw_screen([*menu_lines(inline_results), style(message, 96)], True)
         else:
             print(message, flush=True)
 
     try:
         while True:
-            lines = menu_lines()
+            lines = menu_lines(inline_results)
             if status:
                 lines.append(status)
             draw_screen(lines, redraw)
-            choice = input(style("Select an option › ", 0)).strip()
+            choice = input(style("Select an option › ", 0)).strip().lower()
             try:
                 if choice == "0":
                     return
-                if choice == "1":
-                    name = input("Profile name (empty to cancel): ").strip().lower()
+                if choice == "1" or choice.startswith("s") and inline_results:
+                    name = (select_profile("Switch to a saved", redraw) if choice == "1"
+                            else profile_at(choice[1:], list(inline_results)))
+                    if name is None and choice != "1":
+                        raise ValueError("Choose a displayed switch number, such as S1.")
                     status = change_account(name, notify) if name else "Cancelled."
                 elif choice == "2":
                     status = ask_profile(read_active()[1])
@@ -614,9 +708,18 @@ def terminal_menu():
                         notify("Verifying and writing the export...")
                         status = f"Export created:\n{export_active(folder)}"
                 elif choice == "5":
-                    status = show_quotas(redraw)
+                    status = show_quotas(redraw, layout == "inline", notify, inline_results)
                 elif choice == "6":
                     status = change_account(None, notify)
+                elif choice == "7":
+                    name = select_profile("Remove a saved", redraw)
+                    status = remove_profile(name) if name else "Removal cancelled."
+                    if name and name not in profile_ids():
+                        inline_results.pop(name, None)
+                elif choice == "8":
+                    layout, status = change_quota_layout(layout, redraw)
+                    if layout == "separate":
+                        inline_results.clear()
                 else:
                     status = style("Choose a displayed option.", 93)
             except (OSError, ValueError, subprocess.SubprocessError) as error:

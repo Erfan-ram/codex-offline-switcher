@@ -3,6 +3,8 @@ SHA256.txt
 manifest.txt
 identity.sha256
 profiles/
+removed-profiles/
+settings.json
 backups/
 exports/
 codex-auth-export-*/

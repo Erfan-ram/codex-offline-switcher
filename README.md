@@ -24,7 +24,9 @@ Choose **Save this computer's active account** to copy the current Codex login i
 
 Save your work before switching or signing out. The tool closes recognized Codex and VS Code processes before replacing or removing the local credential. If processes remain open, close them manually and retry.
 
-In an interactive terminal, the menu redraws in place and replaces the status message as an operation progresses. The quota screen loads accounts one at a time. Press Enter to return to the menu, or use N and P to browse when there is more than one page.
+In an interactive terminal, the menu redraws in place as operations progress. Choose **1** to switch by profile number and **7** to remove a profile by number. Removal archives the saved copies under the app's local data directory and leaves the current Codex login in place.
+
+Choose **5** to show quota results directly below the menu. Type a displayed shortcut such as **S1** to switch to that profile. In **8 — Settings**, choose **Separate quota screen** if you prefer pages. On that screen, enter a profile number to switch, press Enter to return, or use N and P to browse more pages.
 
 ## Transfer a profile
 
